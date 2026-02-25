@@ -7,6 +7,7 @@ use Data::UUID;
 use File::Path qw(make_path);
 use File::Copy qw(move);
 use File::Spec;
+use Time::HiRes qw(gettimeofday);
 use POSIX qw(strftime);
 use YAML::XS qw(LoadFile Dump);
 
@@ -61,6 +62,15 @@ sub _app_dir {
     return File::Spec->catdir($STORAGE_ROOT, $code_name);
 }
 
+sub _valid_code_name {
+    my ($code_name) = @_;
+    return 0 if !defined $code_name || $code_name eq '';
+    return 0 if $code_name =~ m{[\\/]};
+    return 0 if $code_name =~ /\A\.{1,2}\z/;
+    return 0 if $code_name =~ /\.\./;
+    return $code_name =~ /\A[A-Za-z0-9][A-Za-z0-9._-]*\z/;
+}
+
 sub _status_dir {
     my ($code_name, $status) = @_;
     return File::Spec->catdir(_app_dir($code_name), $status);
@@ -74,9 +84,10 @@ sub _ensure_dirs {
 
 sub _task_file {
     my (%args) = @_;
+    my $suffix = defined $args{suffix} && $args{suffix} ne '' ? "-$args{suffix}" : '';
     return File::Spec->catfile(
         _status_dir($args{code_name}, $args{status}),
-        "$args{stamp}-$args{uuid}.md",
+        "$args{stamp}-$args{uuid}$suffix.md",
     );
 }
 
@@ -84,9 +95,14 @@ sub _parse_filename {
     my ($path) = @_;
     my ($file) = $path =~ m{([^/]+)$};
     return unless $file;
-    my ($stamp, $uuid) = $file =~ /^([0-9]{8}T[0-9]{6})-(.+)\.md$/;
+    my ($stamp, $uuid) = $file =~ /^([0-9]{8}T[0-9]{6})-([0-9A-Fa-f-]{36})(?:-.+)?\.md$/;
     return unless $stamp && $uuid;
     return ($stamp, $uuid);
+}
+
+sub _version_suffix {
+    my ($sec, $usec) = gettimeofday();
+    return sprintf('%d%06d-%06d', $sec, $usec, int(rand(1_000_000)));
 }
 
 sub _read_task_file {
@@ -128,6 +144,7 @@ sub _write_task_version {
         status    => $args{status},
         stamp     => $args{stamp},
         uuid      => $args{uuid},
+        suffix    => _version_suffix(),
     );
 
     open my $fh, '>', $path or die "Cannot write $path: $!";
@@ -231,6 +248,10 @@ post '/tasks' => sub {
         return _respond({ error => 'username, code-name, and details are required' }, 400);
     }
 
+    if (!_valid_code_name($code_name)) {
+        return _respond({ error => 'code-name is invalid' }, 400);
+    }
+
     if (!_validate_user($username)) {
         return _respond({ error => 'username is invalid or not found in users.yml' }, 403);
     }
@@ -264,6 +285,10 @@ put '/tasks/:id' => sub {
 
     if (!$username || !$code_name || !defined $details) {
         return _respond({ error => 'username, code-name, and details are required' }, 400);
+    }
+
+    if (!_valid_code_name($code_name)) {
+        return _respond({ error => 'code-name is invalid' }, 400);
     }
 
     if (!_validate_user($username)) {
@@ -305,6 +330,10 @@ get '/tasks/:id' => sub {
         return _respond({ error => 'username and code-name are required' }, 400);
     }
 
+    if (!_valid_code_name($code_name)) {
+        return _respond({ error => 'code-name is invalid' }, 400);
+    }
+
     if (!_validate_user($username)) {
         return _respond({ error => 'username is invalid or not found in users.yml' }, 403);
     }
@@ -335,6 +364,10 @@ get '/tasks' => sub {
 
     if (!$username || !$code_name) {
         return _respond({ error => 'username and code-name are required' }, 400);
+    }
+
+    if (!_valid_code_name($code_name)) {
+        return _respond({ error => 'code-name is invalid' }, 400);
     }
 
     if (!_validate_user($username)) {
@@ -407,6 +440,10 @@ post '/tasks/:id/done' => sub {
         return _respond({ error => 'username and code-name are required' }, 400);
     }
 
+    if (!_valid_code_name($code_name)) {
+        return _respond({ error => 'code-name is invalid' }, 400);
+    }
+
     if (!_validate_user($username)) {
         return _respond({ error => 'username is invalid or not found in users.yml' }, 403);
     }
@@ -417,13 +454,9 @@ post '/tasks/:id/done' => sub {
     }
 
     for my $v (@{$latest->{all_versions}}) {
-        my ($stamp, $uuid) = _parse_filename($v->{path});
-        my $target = _task_file(
-            code_name => $code_name,
-            status    => 'done',
-            stamp     => $stamp,
-            uuid      => $uuid,
-        );
+        my ($name) = $v->{path} =~ m{([^/]+)$};
+        next if !$name;
+        my $target = File::Spec->catfile(_status_dir($code_name, 'done'), $name);
         next if $v->{path} eq $target;
         move($v->{path}, $target);
     }
