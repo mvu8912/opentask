@@ -1,0 +1,13 @@
+version: '3.9'
+services:
+  opentask:
+    build: .
+    image: opentask:local
+    ports:
+      - "5000:5000"
+    environment:
+      TASK_STORAGE_ROOT: /opentask
+      USER_FILE: /config/users.yml
+    volumes:
+      - ./data:/opentask
+      - ./users.yml:/config/users.yml:ro
