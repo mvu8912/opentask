@@ -1,0 +1,5 @@
+requires 'Dancer2', '0.400000';
+requires 'Data::UUID';
+requires 'JSON';
+requires 'Starman';
+requires 'YAML::XS';
